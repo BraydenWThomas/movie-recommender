@@ -1,1 +1,11 @@
-/.env
+# Ignore environment variables
+.env
+
+# Python-related ignores
+__pycache__/
+*.pyc
+*.pyo
+*.pyd
+
+# Ignore virtual environments
+venv/
