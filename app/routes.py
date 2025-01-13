@@ -1,71 +1,66 @@
-from fastapi import APIRouter, HTTPException
-from pydantic import BaseModel
+import bcrypt
+from jose import JWTError, jwt
+from datetime import datetime, timedelta
+from typing import Union
+from fastapi import APIRouter, HTTPException, Depends
+from pydantic import BaseModel, EmailStr
 from app.database import db
+from app.secret_key_utils import get_secret_key
 
+# Constants
+SECRET_KEY = get_secret_key()
+ALGORITHM = "HS256"
+ACCESS_TOKEN_EXPIRE_MINUTES = 30
+
+# FastAPI router
 router = APIRouter()
 
-
-# Define Pydantic models for request bodies
-class UserRegisterRequest(BaseModel):
-    email: str
+# Pydantic models for request validation
+class UserCreateRequest(BaseModel):
+    email: EmailStr
     password: str
-
 
 class UserLoginRequest(BaseModel):
-    email: str
+    email: EmailStr
     password: str
 
+# Helper function to hash passwords
+def hash_password(password: str) -> str:
+    return bcrypt.hashpw(password.encode('utf-8'), bcrypt.gensalt()).decode('utf-8')
 
-class RecommendationRequest(BaseModel):
-    movie: str
-    rating: float
+# Helper function to verify passwords
+def verify_password(plain_password: str, hashed_password: str) -> bool:
+    return bcrypt.checkpw(plain_password.encode('utf-8'), hashed_password.encode('utf-8'))
 
-
-# Test endpoint
-@router.get("/")
-def read_root():
-    return {"message": "Welcome to the Movie Recommender API"}
-
+# Helper function to create a JWT token
+def create_access_token(data: dict, expires_delta: Union[timedelta, None] = None):
+    to_encode = data.copy()
+    expire = datetime.utcnow() + (expires_delta or timedelta(minutes=ACCESS_TOKEN_EXPIRE_MINUTES))
+    to_encode.update({"exp": expire})
+    return jwt.encode(to_encode, SECRET_KEY, algorithm=ALGORITHM)
 
 # Register a new user
 @router.post("/register")
-def create_user(request: UserRegisterRequest):
+def create_user(user: UserCreateRequest):
     users_collection = db["users"]
-    if users_collection.find_one({"email": request.email}):
+    if users_collection.find_one({"email": user.email}):
         raise HTTPException(status_code=400, detail="User already exists")
-    user_data = {"email": request.email, "password": request.password, "recommendations": []}
-    users_collection.insert_one(user_data)
+    hashed_password = hash_password(user.password)
+    new_user = {"email": user.email, "password": hashed_password, "recommendations": []}
+    users_collection.insert_one(new_user)
     return {"message": "User registered successfully"}
-
 
 # Login user
 @router.post("/login")
-def login_user(request: UserLoginRequest):
+def login_user(user: UserLoginRequest):
     users_collection = db["users"]
-    user = users_collection.find_one({"email": request.email, "password": request.password})
-    if not user:
+    db_user = users_collection.find_one({"email": user.email})
+    if not db_user or not verify_password(user.password, db_user["password"]):
         raise HTTPException(status_code=401, detail="Invalid credentials")
-    return {"message": "Login successful"}
+    token = create_access_token({"sub": user.email})
+    return {"access_token": token, "token_type": "bearer"}
 
-
-# Add a recommendation
-@router.post("/recommendations/{email}")
-def add_recommendation(email: str, request: RecommendationRequest):
-    users_collection = db["users"]
-    result = users_collection.update_one(
-        {"email": email},
-        {"$push": {"recommendations": {"movie": request.movie, "rating": request.rating}}}
-    )
-    if result.matched_count == 0:
-        raise HTTPException(status_code=404, detail="User not found")
-    return {"message": "Recommendation added successfully"}
-
-
-# Get user recommendations
-@router.get("/recommendations/{email}")
-def get_recommendations(email: str):
-    users_collection = db["users"]
-    user = users_collection.find_one({"email": email}, {"_id": 0, "recommendations": 1})
-    if not user:
-        raise HTTPException(status_code=404, detail="User not found")
-    return {"recommendations": user.get("recommendations", [])}
+# Example protected route
+@router.get("/protected")
+def protected_route(token: str = Depends(create_access_token)):
+    return {"message": "You have accessed a protected route"}

@@ -10,3 +10,6 @@ __pycache__/
 # Ignore virtual environments
 venv/
 venvScriptsactivate/
+
+# Secret key file
+secret.key
